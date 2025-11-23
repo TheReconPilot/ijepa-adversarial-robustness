@@ -8,6 +8,14 @@ from transformers import AutoImageProcessor, AutoModel, get_cosine_schedule_with
 from data import get_dataloaders as _get_dls, get_num_classes
 from train_eval import train_one_epoch, evaluate, append_metrics, extract_embed, save_checkpoint, count_params
 
+# Ignore certificate verification so any dataset download proceeds on server
+import ssl
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
 
 def seed_all(seed: int):
     random.seed(seed)
@@ -87,7 +95,7 @@ def main():
         parts.append(bn_suffix)
     if last_suffix:
         parts.append(last_suffix)
-        
+
     # parts.append(f"seed{args.seed}")
 
     run_name = "_".join(parts)
