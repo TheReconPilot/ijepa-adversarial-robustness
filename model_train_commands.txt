@@ -1,0 +1,92 @@
+## Models
+# IJEPA ViT :   facebook/ijepa_vith14_22k
+# Normal ViT:   google/vit-huge-patch14-224-in21k
+
+# For google, we can have Batch Norm as ON or OFF by providing --use_bn_head
+# For IJEPA model, we can choose to either have average pooling of final layer, or 
+# concatenation of last 4 average-pooled layers, by providing --last4
+
+# --------------------------------------------------------------------------
+## Google ViT-H Models
+
+# ViT, CIFAR-100, BN OFF
+# plain linear probe, standard baseline)
+python train_vit_linear.py \
+  --dataset cifar100 \
+  --model_id google/vit-huge-patch14-224-in21k \
+  --model_type vit \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
+
+
+# ViT, CIFAR-100, BN ON
+python train_vit_linear.py \
+  --dataset cifar100 \
+  --model_id google/vit-huge-patch14-224-in21k \
+  --model_type vit \
+  --use_bn_head \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
+
+
+# ViT, ImageNet-100, BN OFF
+python train_vit_linear.py \
+  --dataset imagenet100 \
+  --model_id google/vit-huge-patch14-224-in21k \
+  --model_type vit \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
+
+# ViT, ImageNet-100, BN ON
+python train_vit_linear.py \
+  --dataset imagenet100 \
+  --model_id google/vit-huge-patch14-224-in21k \
+  --model_type vit \
+  --use_bn_head \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
+
+# --------------------------------------------------------------------------
+## IJEPA Models
+
+# I-JEPA, CIFAR-100, no last-4 (avg pooled final layer)
+python train_vit_linear.py \
+  --dataset cifar100 \
+  --model_id facebook/ijepa_vith14_22k \
+  --model_type ijepa \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
+
+# I-JEPA, CIFAR-100, last-4 layers concatenated
+python train_vit_linear.py \
+  --dataset cifar100 \
+  --model_id facebook/ijepa_vith14_22k \
+  --model_type ijepa \
+  --last4 \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
+
+# I-JEPA, ImageNet-100, no last-4
+python train_vit_linear.py \
+  --dataset imagenet100 \
+  --model_id facebook/ijepa_vith14_22k \
+  --model_type ijepa \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
+
+# I-JEPA, ImageNet-100, last-4 layers concatenated
+python train_vit_linear.py \
+  --dataset imagenet100 \
+  --model_id facebook/ijepa_vith14_22k \
+  --model_type ijepa \
+  --last4 \
+  --batch_size 256 --epochs 25 \
+  --precision amp --seed 0
+  
