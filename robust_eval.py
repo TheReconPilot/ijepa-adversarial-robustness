@@ -268,11 +268,11 @@ def run_pgd_fp32(full_model: nn.Module, loader, device: torch.device,
             for r in range(max(1, restarts)):
                 # random init
                 if norm == "linf":
-                    delta = torch.rand_like(x, generator=g) * (2*eps) - eps
+                    delta = torch.rand(x.shape, device=device, generator=g) * (2*eps) - eps
                     x_adv = clamp01(x + delta).detach()
                     x_adv = project_linf(x_adv, x, eps)
                 else:
-                    delta = torch.randn_like(x, generator=g)
+                    delta = torch.randn(x.shape, device=device, generator=g)
                     flat = delta.view(delta.size(0), -1)
                     norms = torch.linalg.vector_norm(flat, ord=2, dim=1, keepdim=True).clamp_min(1e-12)
                     rscale = torch.rand((delta.size(0),1), device=device, generator=g)
