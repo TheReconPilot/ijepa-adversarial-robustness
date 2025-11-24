@@ -37,36 +37,9 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
-  --batch_size 128 \
-  --precision amp \
+  --seed 0 \
   --save_k 8 \
   --out_dir robust_results/google_vit_bn_on_cifar100_autoattack
-
-
-##############################################
-# GOOGLE ViT — CIFAR-100 — BN OFF
-##############################################
-
-python robust_eval.py \
-  --dataset cifar100 \
-  --model_type vit \
-  --model_id google/vit-huge-patch14-224-in21k \
-  --ckpt runs/cifar100/google_vit_bn_off/best-val-top1.pt \
-  --attack fgsm \
-  --eps 1/255,2/255,4/255,8/255 \
-  --out_dir robust_results/google_cifar100_fgsm_bn_off
-
-python robust_eval.py \
-  --dataset cifar100 \
-  --model_type vit \
-  --model_id google/vit-huge-patch14-224-in21k \
-  --ckpt runs/cifar100/google_vit_bn_off/best-val-top1.pt \
-  --attack pgd_inf \
-  --eps 8/255 \
-  --steps 10,20 \
-  --restarts 3 \
-  --out_dir robust_results/google_cifar100_pgd_bn_off
-
 
 ##############################################
 # GOOGLE ViT — ImageNet-100 — BN ON
@@ -102,63 +75,9 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
-  --batch_size 128 \
-  --precision amp \
+  --seed 0 \
   --save_k 8 \
   --out_dir robust_results/google_vit_bn_on_imagenet100_autoattack
-
-
-
-##############################################
-# GOOGLE ViT — ImageNet-100 — BN OFF
-##############################################
-
-python robust_eval.py \
-  --dataset imagenet100 \
-  --model_type vit \
-  --model_id google/vit-huge-patch14-224-in21k \
-  --ckpt runs/imagenet100/google_vit_bn_off/best-val-top1.pt \
-  --attack fgsm \
-  --eps 1/255,2/255,4/255,8/255 \
-  --out_dir robust_results/google_imagenet100_fgsm_bn_off
-
-python robust_eval.py \
-  --dataset imagenet100 \
-  --model_type vit \
-  --model_id google/vit-huge-patch14-224-in21k \
-  --ckpt runs/imagenet100/google_vit_bn_off/best-val-top1.pt \
-  --attack pgd_inf \
-  --eps 8/255 \
-  --steps 10,20 \
-  --restarts 3 \
-  --out_dir robust_results/google_imagenet100_pgd_bn_off
-
-
-
-##############################################
-# I-JEPA — CIFAR-100 — last1
-##############################################
-
-python robust_eval.py \
-  --dataset cifar100 \
-  --model_type ijepa \
-  --model_id facebook/ijepa_vith14_22k \
-  --ckpt runs/cifar100/ijepa_last1/best-val-top1.pt \
-  --attack fgsm \
-  --eps 1/255,2/255,4/255,8/255 \
-  --out_dir robust_results/ijepa_cifar100_fgsm
-
-python robust_eval.py \
-  --dataset cifar100 \
-  --model_type ijepa \
-  --model_id facebook/ijepa_vith14_22k \
-  --ckpt runs/cifar100/ijepa_last1/best-val-top1.pt \
-  --attack pgd_inf \
-  --eps 8/255 \
-  --steps 10,20 \
-  --restarts 3 \
-  --out_dir robust_results/ijepa_cifar100_pgd
-
 
 ##############################################
 # I-JEPA — CIFAR-100 — last4
@@ -197,38 +116,9 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
-  --batch_size 128 \
-  --precision amp \
+  --seed 0 \
   --save_k 8 \
   --out_dir robust_results/ijepa_last4_cifar100_autoattack
-
-
-
-##############################################
-# I-JEPA — ImageNet-100 — last1
-##############################################
-
-python robust_eval.py \
-  --dataset imagenet100 \
-  --model_type ijepa \
-  --model_id facebook/ijepa_vith14_22k \
-  --ckpt runs/imagenet100/ijepa_last1/best-val-top1.pt \
-  --attack fgsm \
-  --eps 1/255,2/255,4/255,8/255 \
-  --out_dir robust_results/ijepa_imagenet100_fgsm
-
-python robust_eval.py \
-  --dataset imagenet100 \
-  --model_type ijepa \
-  --model_id facebook/ijepa_vith14_22k \
-  --ckpt runs/imagenet100/ijepa_last1/best-val-top1.pt \
-  --attack pgd_inf \
-  --eps 8/255 \
-  --steps 10,20 \
-  --restarts 3 \
-  --out_dir robust_results/ijepa_imagenet100_pgd
-
-
 
 ##############################################
 # I-JEPA — ImageNet-100 — last4
@@ -267,7 +157,7 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
-  --batch_size 128 \
-  --precision amp \
+  --seed 0 \
   --save_k 8 \
   --out_dir robust_results/ijepa_last4_imagenet100_autoattack
+
