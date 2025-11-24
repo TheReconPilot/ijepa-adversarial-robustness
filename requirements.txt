@@ -1,0 +1,10 @@
+numpy
+pandas
+matplotlib
+tqdm
+scikit-learn
+torch 
+torchvision
+datasets
+transformers
+git+https://github.com/fra31/auto-attack
