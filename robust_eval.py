@@ -518,7 +518,7 @@ def main():
         df.to_csv(csv_path, mode="a", header=False, index=False)
 
     summary = {"clean_top1": clean_top1, "n_rows": len(rows), "attack": args.attack, "runs": rows}
-    save_json(os.path.join(args.out_dir, "robust_summary.json"), summary)
+    save_json(os.path.join(args.out_dir, f"robust_summary_{args.attack}.json"), summary)
 
     print(f"Done. Clean Top-1: {clean_top1:.2f}%. Wrote: {csv_path}")
 
