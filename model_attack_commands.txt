@@ -27,6 +27,21 @@ python robust_eval.py \
   --restarts 3 \
   --out_dir robust_results/google_cifar100_pgd
 
+python robust_eval.py \
+  --dataset cifar100 \
+  --model_type vit \
+  --model_id google/vit-huge-patch14-224-in21k \
+  --ckpt runs/cifar100/google_vit_bn_on/best-val-top1.pt \
+  --attack autoattack \
+  --eps 1/255,2/255,4/255,8/255 \
+  --aa_norm linf \
+  --aa_version standard \
+  --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --batch_size 128 \
+  --precision amp \
+  --save_k 8 \
+  --out_dir robust_results/google_vit_bn_on_cifar100_autoattack
+
 
 ##############################################
 # GOOGLE ViT — CIFAR-100 — BN OFF
@@ -76,6 +91,22 @@ python robust_eval.py \
   --steps 10,20 \
   --restarts 3 \
   --out_dir robust_results/google_imagenet100_pgd
+
+python robust_eval.py \
+  --dataset imagenet100 \
+  --model_type vit \
+  --model_id google/vit-huge-patch14-224-in21k \
+  --ckpt runs/imagenet100/google_vit_bn_on/best-val-top1.pt \
+  --attack autoattack \
+  --eps 1/255,2/255,4/255,8/255 \
+  --aa_norm linf \
+  --aa_version standard \
+  --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --batch_size 128 \
+  --precision amp \
+  --save_k 8 \
+  --out_dir robust_results/google_vit_bn_on_imagenet100_autoattack
+
 
 
 ##############################################
@@ -155,6 +186,22 @@ python robust_eval.py \
   --restarts 3 \
   --out_dir robust_results/ijepa_cifar100_pgd_last4
 
+python robust_eval.py \
+  --dataset cifar100 \
+  --model_type ijepa \
+  --last4 \
+  --model_id facebook/ijepa_vith14_22k \
+  --ckpt runs/cifar100/ijepa_last4/best-val-top1.pt \
+  --attack autoattack \
+  --eps 1/255,2/255,4/255,8/255 \
+  --aa_norm linf \
+  --aa_version standard \
+  --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --batch_size 128 \
+  --precision amp \
+  --save_k 8 \
+  --out_dir robust_results/ijepa_last4_cifar100_autoattack
+
 
 
 ##############################################
@@ -209,7 +256,18 @@ python robust_eval.py \
   --restarts 3 \
   --out_dir robust_results/ijepa_imagenet100_pgd_last4
 
-
-# echo "=============================================="
-# echo " ALL ROBUSTNESS EXPERIMENTS COMPLETED SUCCESSFULLY "
-# echo "=============================================="
+python robust_eval.py \
+  --dataset imagenet100 \
+  --model_type ijepa \
+  --last4 \
+  --model_id facebook/ijepa_vith14_22k \
+  --ckpt runs/imagenet100/ijepa_last4/best-val-top1.pt \
+  --attack autoattack \
+  --eps 1/255,2/255,4/255,8/255 \
+  --aa_norm linf \
+  --aa_version standard \
+  --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --batch_size 128 \
+  --precision amp \
+  --save_k 8 \
+  --out_dir robust_results/ijepa_last4_imagenet100_autoattack
