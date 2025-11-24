@@ -360,7 +360,7 @@ def main():
     ap.add_argument("--steps", default="10,20,50")
     ap.add_argument("--alpha", default="auto", help="'auto' or float")
     ap.add_argument("--restarts", type=int, default=1)
-    ap.add_argument("--batch_size", type=int, default=64)
+    ap.add_argument("--batch_size", type=int, default=32)
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--split", choices=["val","test"], default="val")
     ap.add_argument("--precision", choices=["fp32","amp","bf16"], default="fp32",
