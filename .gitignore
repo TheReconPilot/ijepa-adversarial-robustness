@@ -4,3 +4,7 @@ robust_runs/
 
 __pycache__/
 attacks/__pycache__/
+
+logs/
+
+*.slurm
