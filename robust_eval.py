@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # robust_eval.py — unified evaluation: FGSM, PGD, AutoAttack
-# Unified model wrapper (FullClassifier) + FP32 evaluation for exact comparability.
+# Rewritten to: (1) support per-subattack AutoAttack (--aa_individual),
+# (2) write incremental CSV rows as each attack completes (resilient to preemption),
+# (3) save adversarial triplets per-attack when requested.
 
 from __future__ import annotations
 import argparse, os, sys, json, time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -39,12 +41,25 @@ from robust_utils import (
 _BICUBIC = InterpolationMode.BICUBIC
 
 # ------------------------
+# Result saving function
+# ------------------------
+
+def write_row_to_csv(row: dict, csv_path: str):
+    """Append a single row (dict) to csv_path atomically (pandas)."""
+    df = pd.DataFrame([row])
+    if not os.path.exists(csv_path):
+        df.to_csv(csv_path, index=False)
+    else:
+        df.to_csv(csv_path, mode="a", header=False, index=False)
+
+
+# ------------------------
 # Data pipeline / loaders
 # ------------------------
 
 def build_eval_transform(processor, target: Optional[int] = None):
     mean = getattr(processor, "image_mean", [0.485, 0.456, 0.406])
-    std  = getattr(processor, "image_std",  [0.229, 0.224, 0.225])
+    std = getattr(processor, "image_std", [0.229, 0.224, 0.225])
     size = getattr(processor, "size", None) or getattr(processor, "crop_size", None)
     if isinstance(size, dict):
         target = size.get("shortest_edge", size.get("height", 224))
@@ -69,16 +84,20 @@ def build_loader(dataset: str, split: str, processor, batch_size: int, workers: 
             raise ImportError("Install `datasets` to evaluate ImageNet-100")
         hf_split = "validation" if split == "val" else split
         dset = load_dataset("ilee0022/ImageNet100", split=hf_split)
+
         def apply_transform(batch):
             batch["pixel_values"] = [tf(img.convert("RGB")) for img in batch["image"]]
             return batch
+
         dset.set_transform(apply_transform)
+
         def collate_fn(batch):
             pixel_values = torch.stack([b["pixel_values"] for b in batch])
             labels = torch.tensor([b["label"] for b in batch])
             return pixel_values, labels
+
         return DataLoader(dset, batch_size=batch_size, shuffle=False, num_workers=workers,
-                          pin_memory=True, persistent_workers=(workers>0), collate_fn=collate_fn)
+                          pin_memory=True, persistent_workers=(workers > 0), collate_fn=collate_fn)
 
     elif dataset.lower() == "cifar100":
         if split == "val":
@@ -87,11 +106,11 @@ def build_loader(dataset: str, split: str, processor, batch_size: int, workers: 
             val_idx = idx[-5000:]
             val_set = Subset(full_train_for_val, val_idx)
             return DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=workers,
-                              pin_memory=True, persistent_workers=(workers>0))
+                              pin_memory=True, persistent_workers=(workers > 0))
         else:
             test_set = datasets.CIFAR100(root="./data", train=False, download=True, transform=tf)
             return DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=workers,
-                              pin_memory=True, persistent_workers=(workers>0))
+                              pin_memory=True, persistent_workers=(workers > 0))
     else:
         raise ValueError("Unknown dataset: " + dataset)
 
@@ -133,6 +152,7 @@ def load_encoder_and_head(model_id: str, ckpt_path: str, device: torch.device,
             super().__init__()
             self.bn = nn.BatchNorm1d(in_dim) if use_bn else None
             self.fc = nn.Linear(in_dim, num_classes)
+
         def forward(self, x):
             if self.bn is not None:
                 x = self.bn(x)
@@ -155,6 +175,7 @@ class FullClassifier(nn.Module):
     Wraps encoder_with_norm (ModelWithNorm) + head -> logits.
     This is the single model attacked by all methods (FGSM/PGD/AA).
     """
+
     def __init__(self, encoder_with_norm: nn.Module, head: nn.Module):
         super().__init__()
         self.encoder_with_norm = encoder_with_norm
@@ -223,23 +244,17 @@ def run_fgsm_fp32(full_model: nn.Module, loader, device: torch.device, eps_list:
                 correct += (pred == y).sum().item()
                 n += y.numel()
 
-            # Optionally save first K triplets (global across batches)
-            if save_k > 0:
-                # Save only the first save_k images overall (use a small global index)
-                global_idx = i * loader.batch_size
-                # We'll handle per-run saving later (outside loop) to keep ordering simple
-
         wall = time.time() - t0
         rows.append({
             "attack": "fgsm", "eps": eps, "steps": 1, "restarts": 1,
-            "robust_top1": 100.0 * correct / max(n,1),
+            "robust_top1": 100.0 * correct / max(n, 1),
             "imgs_per_sec": n / max(wall, 1e-6), "wall_clock_sec": wall,
         })
     return rows
 
 
 # ------------------------
-# FP32 PGD (multi-step) - returns rows similar to original run_pgd
+# FP32 PGD (multi-step)
 # ------------------------
 
 def run_pgd_fp32(full_model: nn.Module, loader, device: torch.device,
@@ -252,11 +267,9 @@ def run_pgd_fp32(full_model: nn.Module, loader, device: torch.device,
         pbar = tqdm(loader, desc=f"PGD-{norm} eps={eps:g} steps={steps}", leave=False)
         t0 = time.time()
         g = torch.Generator(device=device).manual_seed(seed)
-        # We'll gather adversarial examples per-batch and compute accuracy
         for i, (x, y) in enumerate(pbar):
             x = x.to(device).float()
             y = y.to(device)
-            # choose alpha
             if alpha is None:
                 alpha_local = (2.0 * eps / steps) if norm == "linf" else (2.5 * eps / steps)
             else:
@@ -266,16 +279,15 @@ def run_pgd_fp32(full_model: nn.Module, loader, device: torch.device,
             best_loss = torch.full((x.size(0),), -float("inf"), device=device)
 
             for r in range(max(1, restarts)):
-                # random init
                 if norm == "linf":
-                    delta = torch.rand(x.shape, device=device, generator=g) * (2*eps) - eps
+                    delta = torch.rand(x.shape, device=device, generator=g) * (2 * eps) - eps
                     x_adv = clamp01(x + delta).detach()
                     x_adv = project_linf(x_adv, x, eps)
                 else:
                     delta = torch.randn(x.shape, device=device, generator=g)
                     flat = delta.view(delta.size(0), -1)
                     norms = torch.linalg.vector_norm(flat, ord=2, dim=1, keepdim=True).clamp_min(1e-12)
-                    rscale = torch.rand((delta.size(0),1), device=device, generator=g)
+                    rscale = torch.rand((delta.size(0), 1), device=device, generator=g)
                     scaled = (flat / norms) * (eps * rscale)
                     delta = scaled.view_as(delta)
                     x_adv = clamp01(x + delta).detach()
@@ -301,7 +313,6 @@ def run_pgd_fp32(full_model: nn.Module, loader, device: torch.device,
                         x_adv = clamp01(x_adv)
                     x_adv = x_adv.detach()
 
-                # evaluate final loss and select worst restart
                 with torch.no_grad():
                     logits_f = full_model(x_adv)
                     final_loss = F.cross_entropy(logits_f, y, reduction="none")
@@ -310,21 +321,19 @@ def run_pgd_fp32(full_model: nn.Module, loader, device: torch.device,
                         best_loss = final_loss
                     else:
                         pick = final_loss > best_loss
-                        best_x = torch.where(pick.view(-1,1,1,1), x_adv, best_x)
+                        best_x = torch.where(pick.view(-1, 1, 1, 1), x_adv, best_x)
                         best_loss = torch.where(pick, final_loss, best_loss)
 
-            # now best_x contains the chosen adversarial examples for this batch
             with torch.no_grad():
                 logits_adv = full_model(best_x)
                 pred = logits_adv.argmax(1)
                 correct += (pred == y).sum().item()
                 n += y.numel()
-            # (we do not save K here per-batch; saving will be handled after materializing when needed)
 
         wall = time.time() - t0
         rows.append({
             "attack": f"pgd_{norm}", "eps": eps, "steps": steps, "restarts": restarts,
-            "robust_top1": 100.0 * correct / max(n,1),
+            "robust_top1": 100.0 * correct / max(n, 1),
             "imgs_per_sec": n / max(wall, 1e-6), "wall_clock_sec": wall,
         })
     return rows
@@ -334,7 +343,7 @@ def run_pgd_fp32(full_model: nn.Module, loader, device: torch.device,
 # Helper: collect full split into tensors
 # ------------------------
 
-def load_whole_split(loader, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+def load_whole_split(loader, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
     xs, ys = [], []
     for x, y in tqdm(loader, desc="Collecting split into memory"):
         xs.append(x)
@@ -350,34 +359,34 @@ def load_whole_split(loader, device: torch.device) -> tuple[torch.Tensor, torch.
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset", choices=["cifar100","imagenet100"], required=True)
-    ap.add_argument("--model_type", choices=["ijepa","vit"], required=True)
+    ap.add_argument("--dataset", choices=["cifar100", "imagenet100"], required=True)
+    ap.add_argument("--model_type", choices=["ijepa", "vit"], required=True)
     ap.add_argument("--last4", action="store_true")
     ap.add_argument("--model_id", required=True)
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--attack", choices=["fgsm","pgd_inf","pgd_l2","autoattack"], required=True)
+    ap.add_argument("--attack", choices=["fgsm", "pgd_inf", "pgd_l2", "autoattack"], required=True)
     ap.add_argument("--eps", required=True, help="float or list: e.g. 8/255 or 1/255,2/255,4/255,8/255")
     ap.add_argument("--steps", default="10,20,50")
     ap.add_argument("--alpha", default="auto", help="'auto' or float")
     ap.add_argument("--restarts", type=int, default=1)
     ap.add_argument("--batch_size", type=int, default=32)
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--split", choices=["val","test"], default="val")
-    ap.add_argument("--precision", choices=["fp32","amp","bf16"], default="fp32",
+    ap.add_argument("--split", choices=["val", "test"], default="val")
+    ap.add_argument("--precision", choices=["fp32", "amp", "bf16"], default="fp32",
                    help="Precision option is kept for CLI compatibility; this unified script uses FP32 for attacks & eval.")
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save_k", type=int, default=0, help="Save first K triplets (x, x_adv, delta)")
     # AutoAttack specific
-    ap.add_argument("--aa_norm", choices=["linf","l2"], default="linf", help="Norm for AutoAttack")
+    ap.add_argument("--aa_norm", choices=["linf", "l2"], default="linf", help="Norm for AutoAttack")
     ap.add_argument("--aa_version", default="standard", help="AutoAttack version string")
     ap.add_argument("--aa_attacks", default="apgd-ce,apgd-dlr,fab,square",
                     help="Comma-separated list of AutoAttack sub-attacks to run")
     ap.add_argument("--aa_individual", action="store_true",
-                help="Run each AutoAttack sub-attack separately and log per-attack results")
+                    help="Run each AutoAttack sub-attack separately and log per-attack results")
     args = ap.parse_args()
 
-    # We force deterministic-ish behavior
+    # deterministic-ish
     seed_all(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(args.out_dir, exist_ok=True)
@@ -419,18 +428,32 @@ def main():
         batch_size=args.batch_size,
     )
 
+    csv_path = os.path.join(args.out_dir, "robust_metrics.csv")
+
     if args.attack == "fgsm":
         rows = run_fgsm_fp32(full_model, loader, device, eps_list, args.out_dir, save_k=args.save_k)
+        for row in rows:
+            row.update(meta)
+            row["clean_top1_for_reference"] = clean_top1
+            write_row_to_csv(row, csv_path)
 
     elif args.attack == "pgd_inf":
         assert len(eps_list) == 1, "For PGD-ℓ∞, pass exactly one --eps; use separate runs for others."
         rows = run_pgd_fp32(full_model, loader, device, eps_list[0], steps_list, args.restarts,
                             alpha_val, args.out_dir, save_k=args.save_k, norm="linf", seed=args.seed)
+        for row in rows:
+            row.update(meta)
+            row["clean_top1_for_reference"] = clean_top1
+            write_row_to_csv(row, csv_path)
 
     elif args.attack == "pgd_l2":
         assert len(eps_list) == 1, "For PGD-ℓ2, pass exactly one --eps; use separate runs for others."
         rows = run_pgd_fp32(full_model, loader, device, eps_list[0], steps_list, args.restarts,
                             alpha_val, args.out_dir, save_k=args.save_k, norm="l2", seed=args.seed)
+        for row in rows:
+            row.update(meta)
+            row["clean_top1_for_reference"] = clean_top1
+            write_row_to_csv(row, csv_path)
 
     else:  # autoattack
         if AutoAttack is None:
@@ -442,7 +465,6 @@ def main():
         print(f"[INFO] Loaded {n_samples} images for AutoAttack.")
 
         attacks_to_run = [s.strip() for s in args.aa_attacks.split(",") if s.strip()]
-
         use_individual = args.aa_individual
 
         for eps in eps_list:
@@ -472,7 +494,7 @@ def main():
                 with torch.no_grad():
                     preds = []
                     for i in range(0, n_samples, args.batch_size):
-                        logits = full_model(x_adv[i : i + args.batch_size])
+                        logits = full_model(x_adv[i: i + args.batch_size])
                         preds.append(logits.argmax(1))
                     preds = torch.cat(preds, dim=0)
 
@@ -491,32 +513,46 @@ def main():
                     imgs_per_sec=imgs_per_sec,
                     wall_clock_sec=t.elapsed,
                 )
+
+                # write immediately
+                row.update(meta)
+                row["clean_top1_for_reference"] = clean_top1
+                write_row_to_csv(row, csv_path)
                 rows.append(row)
+
+                # optionally save first K triplets for the overall worst-case
+                if args.save_k > 0:
+                    save_dir = os.path.join(args.out_dir, f"autoattack_eps={eps:g}")
+                    os.makedirs(save_dir, exist_ok=True)
+                    K = min(args.save_k, n_samples)
+                    for i in range(K):
+                        orig = x_all[i].detach().cpu()
+                        adv = x_adv[i].detach().cpu()
+                        delta = adv - orig
+                        vutils.save_image(orig, os.path.join(save_dir, f"img_{i:03d}_orig.png"))
+                        vutils.save_image(adv, os.path.join(save_dir, f"img_{i:03d}_adv.png"))
+                        vutils.save_image(delta * 10.0 + 0.5, os.path.join(save_dir, f"img_{i:03d}_delta.png"))
 
             # -------------------------------------------------
             # CASE 2: individual sub-attack results
             # -------------------------------------------------
             else:
                 with Timer() as t:
-                    dict_adv = adversary.run_standard_evaluation_individual(
-                        x_all, y_all, bs=args.batch_size
-                    )
+                    dict_adv = adversary.run_standard_evaluation_individual(x_all, y_all, bs=args.batch_size)
 
-                # Evaluate each attack separately
+                # dict_adv: mapping attack_name -> (x_adv) or (x_adv, y_adv)
                 for attack_name, x_adv in dict_adv.items():
                     full_model.eval()
                     with torch.no_grad():
                         preds = []
                         for i in range(0, n_samples, args.batch_size):
-                            logits = full_model(x_adv[i : i + args.batch_size])
+                            logits = full_model(x_adv[i: i + args.batch_size])
                             preds.append(logits.argmax(1))
                         preds = torch.cat(preds, dim=0)
 
                     robust_top1 = (preds == y_all).float().mean().item() * 100.0
 
-                    print(
-                        f"[AutoAttack:{attack_name}] eps={eps:g} robust Top-1: {robust_top1:.2f}%"
-                    )
+                    print(f"[AutoAttack:{attack_name}] eps={eps:g} robust Top-1: {robust_top1:.2f}%")
 
                     row = dict(
                         eps=eps,
@@ -528,36 +564,29 @@ def main():
                         imgs_per_sec=n_samples / max(t.elapsed, 1e-6),
                         wall_clock_sec=t.elapsed,
                     )
+
+                    # write immediately
+                    row.update(meta)
+                    row["clean_top1_for_reference"] = clean_top1
+                    write_row_to_csv(row, csv_path)
                     rows.append(row)
 
+                    # optionally save first K triplets per sub-attack
+                    if args.save_k > 0:
+                        save_dir = os.path.join(args.out_dir, f"autoattack_eps={eps:g}", attack_name)
+                        os.makedirs(save_dir, exist_ok=True)
+                        K = min(args.save_k, n_samples)
+                        for i in range(K):
+                            orig = x_all[i].detach().cpu()
+                            adv = x_adv[i].detach().cpu()
+                            delta = adv - orig
+                            vutils.save_image(orig, os.path.join(save_dir, f"img_{i:03d}_orig.png"))
+                            vutils.save_image(adv, os.path.join(save_dir, f"img_{i:03d}_adv.png"))
+                            vutils.save_image(delta * 10.0 + 0.5, os.path.join(save_dir, f"img_{i:03d}_delta.png"))
 
-            # Save first K triplets (orig, adv, delta) if requested
-            if args.save_k > 0:
-                save_dir = os.path.join(args.out_dir, f"autoattack_eps={eps:g}")
-                os.makedirs(save_dir, exist_ok=True)
-                K = min(args.save_k, n_samples)
-                for i in range(K):
-                    orig = x_all[i].detach().cpu()
-                    adv  = x_adv[i].detach().cpu()
-                    delta = adv - orig
-                    # Save: orig, adv, and scaled delta for visualization
-                    vutils.save_image(orig, os.path.join(save_dir, f"img_{i:03d}_orig.png"))
-                    vutils.save_image(adv, os.path.join(save_dir, f"img_{i:03d}_adv.png"))
-                    # scale delta to make it visible (center at 0.5)
-                    vutils.save_image(delta * 10.0 + 0.5, os.path.join(save_dir, f"img_{i:03d}_delta.png"))
+    # End of attack loops
 
-    # append meta and write CSV/JSON
-    for r in rows:
-        r.update(meta)
-        r["clean_top1_for_reference"] = clean_top1
-
-    csv_path = os.path.join(args.out_dir, "robust_metrics.csv")
-    df = pd.DataFrame(rows)
-    if not os.path.exists(csv_path):
-        df.to_csv(csv_path, index=False)
-    else:
-        df.to_csv(csv_path, mode="a", header=False, index=False)
-
+    # JSON summary (keeps the final rows in memory)
     summary = {"clean_top1": clean_top1, "n_rows": len(rows), "attack": args.attack, "runs": rows}
     save_json(os.path.join(args.out_dir, f"robust_summary_{args.attack}.json"), summary)
 
