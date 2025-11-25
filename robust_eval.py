@@ -373,6 +373,8 @@ def main():
     ap.add_argument("--aa_version", default="standard", help="AutoAttack version string")
     ap.add_argument("--aa_attacks", default="apgd-ce,apgd-dlr,fab,square",
                     help="Comma-separated list of AutoAttack sub-attacks to run")
+    ap.add_argument("--aa_individual", action="store_true",
+                help="Run each AutoAttack sub-attack separately and log per-attack results")
     args = ap.parse_args()
 
     # We force deterministic-ish behavior
@@ -441,6 +443,8 @@ def main():
 
         attacks_to_run = [s.strip() for s in args.aa_attacks.split(",") if s.strip()]
 
+        use_individual = args.aa_individual
+
         for eps in eps_list:
             print("-------------------------------------------------------")
             print(f"[AutoAttack] norm={args.aa_norm}, eps={eps:g}, version={args.aa_version}")
@@ -455,40 +459,77 @@ def main():
                 device=device,
             )
 
-            if attacks_to_run:
-                adversary.attacks_to_run = attacks_to_run
+            adversary.attacks_to_run = attacks_to_run
 
-            with Timer() as t:
-                x_adv = adversary.run_standard_evaluation(x_all, y_all, bs=args.batch_size)
+            # -------------------------------------------------
+            # CASE 1: standard AA (single worst-case accuracy)
+            # -------------------------------------------------
+            if not use_individual:
+                with Timer() as t:
+                    x_adv = adversary.run_standard_evaluation(x_all, y_all, bs=args.batch_size)
 
-            # Compute robust accuracy
-            full_model.eval()
-            with torch.no_grad():
-                preds = []
-                for i in range(0, n_samples, args.batch_size):
-                    logits = full_model(x_adv[i : i + args.batch_size])
-                    preds.append(logits.argmax(1))
-                preds = torch.cat(preds, dim=0)
-            robust_top1 = (preds == y_all).float().mean().item() * 100.0
-            imgs_per_sec = n_samples / max(t.elapsed, 1e-6)
+                full_model.eval()
+                with torch.no_grad():
+                    preds = []
+                    for i in range(0, n_samples, args.batch_size):
+                        logits = full_model(x_adv[i : i + args.batch_size])
+                        preds.append(logits.argmax(1))
+                    preds = torch.cat(preds, dim=0)
 
-            print(f"[AutoAttack] eps={eps:g} robust Top-1: {robust_top1:.2f}%")
-            print(
-                f"[AutoAttack] wall_clock={t.elapsed:.1f}s, "
-                f"throughput={imgs_per_sec:.1f} img/s"
-            )
+                robust_top1 = (preds == y_all).float().mean().item() * 100.0
+                imgs_per_sec = n_samples / max(t.elapsed, 1e-6)
 
-            row = dict(
-                eps=eps,
-                robust_top1=robust_top1,
-                steps=None,
-                restarts=None,
-                imgs_per_sec=imgs_per_sec,
-                wall_clock_sec=t.elapsed,
-            )
-            row.update(meta)
-            row["clean_top1_for_reference"] = clean_top1
-            rows.append(row)
+                print(f"[AutoAttack] eps={eps:g} robust Top-1: {robust_top1:.2f}%")
+
+                row = dict(
+                    eps=eps,
+                    attack="autoattack",
+                    subattack="overall",
+                    robust_top1=robust_top1,
+                    steps=None,
+                    restarts=None,
+                    imgs_per_sec=imgs_per_sec,
+                    wall_clock_sec=t.elapsed,
+                )
+                rows.append(row)
+
+            # -------------------------------------------------
+            # CASE 2: individual sub-attack results
+            # -------------------------------------------------
+            else:
+                with Timer() as t:
+                    dict_adv = adversary.run_standard_evaluation_individual(
+                        x_all, y_all, bs=args.batch_size
+                    )
+
+                # Evaluate each attack separately
+                for attack_name, x_adv in dict_adv.items():
+                    full_model.eval()
+                    with torch.no_grad():
+                        preds = []
+                        for i in range(0, n_samples, args.batch_size):
+                            logits = full_model(x_adv[i : i + args.batch_size])
+                            preds.append(logits.argmax(1))
+                        preds = torch.cat(preds, dim=0)
+
+                    robust_top1 = (preds == y_all).float().mean().item() * 100.0
+
+                    print(
+                        f"[AutoAttack:{attack_name}] eps={eps:g} robust Top-1: {robust_top1:.2f}%"
+                    )
+
+                    row = dict(
+                        eps=eps,
+                        attack="autoattack",
+                        subattack=attack_name,
+                        robust_top1=robust_top1,
+                        steps=None,
+                        restarts=None,
+                        imgs_per_sec=n_samples / max(t.elapsed, 1e-6),
+                        wall_clock_sec=t.elapsed,
+                    )
+                    rows.append(row)
+
 
             # Save first K triplets (orig, adv, delta) if requested
             if args.save_k > 0:

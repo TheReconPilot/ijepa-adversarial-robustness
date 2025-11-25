@@ -37,6 +37,7 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --aa_individual \
   --seed 0 \
   --out_dir robust_results/google_cifar100_autoattack
 
@@ -74,6 +75,7 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --aa_individual \
   --seed 0 \
   --out_dir robust_results/google_imagenet100_autoattack
 
@@ -114,6 +116,7 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --aa_individual \
   --seed 0 \
   --out_dir robust_results/ijepa_cifar100_autoattack
 
@@ -154,6 +157,7 @@ python robust_eval.py \
   --aa_norm linf \
   --aa_version standard \
   --aa_attacks apgd-ce,apgd-dlr,fab,square \
+  --aa_individual \
   --seed 0 \
   --out_dir robust_results/ijepa_imagenet100_autoattack
 
