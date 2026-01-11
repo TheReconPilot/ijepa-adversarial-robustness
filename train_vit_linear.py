@@ -42,6 +42,7 @@ def main():
     ap.add_argument("--dataset", type=str, choices=["cifar100", "imagenet100"], required=True,
                     help="Choose dataset.")
     ap.add_argument("--model_id", type=str, required=True, help="HF model id (e.g., google/vit-huge-patch14-224-in21k)")
+    ap.add_argument("--model_nickname", type=str, default="google_vit", help="Nickname for the model to use in output directory")
     ap.add_argument("--model_type", type=str, choices=["vit", "ijepa"], default="vit",
                     help="'vit' uses CLS; 'ijepa' uses avg-pooled patches")
     ap.add_argument("--last4", action="store_true", help="Concatenate last-4 layers as features")
@@ -73,7 +74,7 @@ def main():
     # -----------------------------
     # Backbone prefix
     if args.model_type == "vit":
-        backbone_prefix = "google_vit"
+        backbone_prefix = args.model_nickname
     else:
         backbone_prefix = "ijepa"
 
