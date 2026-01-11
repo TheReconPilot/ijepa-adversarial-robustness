@@ -9,3 +9,4 @@ attacks/__pycache__/
 logs/
 
 *.slurm
+*.sh
