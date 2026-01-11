@@ -1,9 +1,11 @@
+# train_vit_linear.py
 from __future__ import annotations
 import os, json, time, argparse, random
 import numpy as np
 import torch
 import torch.nn as nn
 from transformers import AutoImageProcessor, AutoModel, get_cosine_schedule_with_warmup
+import timm
 
 from data import get_dataloaders as _get_dls, get_num_classes
 from train_eval import train_one_epoch, evaluate, append_metrics, extract_embed, save_checkpoint, count_params
@@ -35,16 +37,24 @@ class LinearHead(nn.Module):
             x = self.bn(x)
         return self.fc(x)
 
+# Wrapper to make timm data config look like a generic processor
+class TimmProcessor:
+    def __init__(self, cfg):
+        self.image_mean = cfg['mean']
+        self.image_std = cfg['std']
+        # support 'input_size' tuple (3, H, W)
+        self.size = {"height": cfg['input_size'][1], "width": cfg['input_size'][2]}
+        self.crop_size = self.size 
 
 def main():
     ap = argparse.ArgumentParser()
     # Dataset & model
     ap.add_argument("--dataset", type=str, choices=["cifar100", "imagenet100"], required=True,
                     help="Choose dataset.")
-    ap.add_argument("--model_id", type=str, required=True, help="HF model id (e.g., google/vit-huge-patch14-224-in21k)")
-    ap.add_argument("--model_nickname", type=str, default="google_vit", help="Nickname for the model to use in output directory")
-    ap.add_argument("--model_type", type=str, choices=["vit", "ijepa"], default="vit",
-                    help="'vit' uses CLS; 'ijepa' uses avg-pooled patches")
+    ap.add_argument("--model_id", type=str, required=True, help="HF model id or MoCo model id")
+    ap.add_argument("--model_nickname", type=str, default=None, help="Nickname for the model to use in output directory")
+    ap.add_argument("--model_type", type=str, choices=["vit", "ijepa", "moco"], default="vit",
+                    help="'vit' (CLS), 'ijepa' (avg-pool), or 'moco' (timm, direct)")
     ap.add_argument("--last4", action="store_true", help="Concatenate last-4 layers as features")
     ap.add_argument("--use_bn_head", action="store_true", help="Add BatchNorm before linear head (ViT eval recipe)")
 
@@ -72,19 +82,19 @@ def main():
     # -----------------------------
     # Build clean run directory name
     # -----------------------------
+    nickname = args.model_nickname if args.model_nickname else args.model_type
+    
     # Backbone prefix
-    if args.model_type == "vit":
-        backbone_prefix = args.model_nickname
-    else:
-        backbone_prefix = "ijepa"
+    backbone_prefix = nickname
 
-    # BN flag (ViT only)
-    if args.model_type == "vit":
+    # BN flag
+    if args.use_bn_head or args.model_type == "moco":
+        # MoCo typically uses BN by default in linear probing
         bn_suffix = "bn_on" if args.use_bn_head else "bn_off"
     else:
-        bn_suffix = None
+        bn_suffix = "bn_on" if args.use_bn_head else None
 
-    # last4 flag (I-JEPA only)
+    # last4 flag
     if args.model_type == "ijepa":
         last_suffix = "last4" if args.last4 else "last1"
     else:
@@ -92,39 +102,59 @@ def main():
 
     # Construct run name
     parts = [backbone_prefix]
-    if bn_suffix:
-        parts.append(bn_suffix)
-    if last_suffix:
-        parts.append(last_suffix)
-
-    # parts.append(f"seed{args.seed}")
+    if bn_suffix: parts.append(bn_suffix)
+    if last_suffix: parts.append(last_suffix)
 
     run_name = "_".join(parts)
-
-    # Final run directory:  out_dir/dataset/run_name/
     run_dir = os.path.join(args.out_dir, args.dataset, run_name)
-
     os.makedirs(run_dir, exist_ok=True)
 
-    # Image processor + encoder
-    processor = AutoImageProcessor.from_pretrained(args.model_id)
-    encoder = AutoModel.from_pretrained(args.model_id, output_hidden_states=args.last4)
+    # -----------------------------
+    # Load Model & Processor
+    # -----------------------------
+    if args.model_type == "moco":
+        print(f"[Info] Loading MoCo model via timm: {args.model_id}")
+        encoder = timm.create_model(
+            "vit_large_patch16_224", 
+            pretrained=True, 
+            pretrained_cfg_overlay=dict(hf_hub_id=args.model_id),
+            num_classes=0 
+        ).to(device)
+        encoder.eval()
+        
+        # Resolve data config correctly from the model
+        data_config = timm.data.resolve_model_data_config(encoder)
+        processor = TimmProcessor(data_config)
+        print(f"[Info] Resolved data config: {data_config}")
+
+    else:
+        # Standard Hugging Face loading
+        print(f"[Info] Loading HF model: {args.model_id}")
+        processor = AutoImageProcessor.from_pretrained(args.model_id)
+        encoder = AutoModel.from_pretrained(args.model_id, output_hidden_states=args.last4)
+        encoder.eval().to(device)
+
     for p in encoder.parameters():
         p.requires_grad = False
-    encoder.eval().to(device)
 
     # Determine feature dimension with a dummy forward
     with torch.no_grad():
         dummy = torch.zeros(2, 3, 224, 224).to(device)
-        out = encoder(pixel_values=dummy)
+        if args.model_type == "moco":
+            out = encoder(dummy)
+        else:
+            out = encoder(pixel_values=dummy)
+        
         feat = extract_embed(out, model_type=args.model_type, last4=args.last4)
         embed_dim = feat.shape[-1]
+        print(f"[Info] Feature dimension: {embed_dim}")
 
     # Class count
     num_classes = args.num_classes if args.num_classes > 0 else get_num_classes(args.dataset)
 
     # Head
-    use_bn = args.use_bn_head if args.model_type == "vit" else False
+    # For MoCo, BN is usually standard, so we default to using it if requested or implied
+    use_bn = args.use_bn_head
     head = LinearHead(embed_dim, num_classes, use_bn=use_bn).to(device)
 
     # Dataloaders
@@ -168,12 +198,9 @@ def main():
             "backbone": args.model_id,
             "dataset": args.dataset,
             "head_params": count_params(head),
-            "total_updates": 0,
             "val_top1": val_m.get("val_top1"),
             "test_top1": test_m.get("test_top1"),
         }
-        with open(os.path.join(run_dir, "summary.json"), "w") as f:
-            json.dump(summary, f, indent=2)
         print(json.dumps(summary, indent=2))
         return
 
@@ -202,14 +229,9 @@ def main():
             "val_top1": val_m["val_top1"],
             "lr_max": metrics["lr_max"],
             "images_per_sec": metrics["images_per_sec"],
-            "gpu_mem_gb": (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else 0.0,
             "wall_time_sec": metrics["wall_time_sec"],
         }
         append_metrics(run_dir, row)
-
-        save_checkpoint(os.path.join(run_dir, "last.pt"), head,
-                        {"embed_dim": embed_dim, "model_id": args.model_id, "epoch": epoch_idx,
-                         "dataset": args.dataset})
 
         if val_m["val_top1"] > best_val:
             best_val = val_m["val_top1"]
@@ -230,28 +252,7 @@ def main():
                           model_type=args.model_type, last4=args.last4)
 
     mins = (time.time() - wall_start) / 60.0
-    summary = {
-        "params": {
-            "backbone": args.model_id,
-            "dataset": args.dataset,
-            "head_params": count_params(head),
-            "optimizer": "AdamW",
-            "weight_decay": args.weight_decay,
-            "batch_size": args.batch_size,
-            "precision": args.precision,
-            "use_bn_head": bool(use_bn),
-            "last4": bool(args.last4),
-            "model_type": args.model_type,
-        },
-        "FLOPs_per_img": None,
-        "total_updates": total_steps,
-        "wall_clock_min": mins,
-        "val_top1": val_final["val_top1"],
-        "test_top1": test_final["test_top1"],
-    }
-    with open(os.path.join(run_dir, "summary.json"), "w") as f:
-        json.dump(summary, f, indent=2)
-
+    print(f"Training Complete. Best Val: {val_final['val_top1']:.2f}%, Test: {test_final['test_top1']:.2f}%")
 
 if __name__ == "__main__":
     main()

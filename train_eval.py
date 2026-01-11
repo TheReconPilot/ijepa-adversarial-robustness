@@ -1,5 +1,3 @@
-# Supports ViT (CLS) and I-JEPA (avg-pool) + optional last4 extraction
-
 from __future__ import annotations
 import json, os, time
 from dataclasses import dataclass
@@ -28,7 +26,13 @@ def extract_embed(outputs, model_type: str = "vit", last4: bool = False):
     Unified embedding extractor supporting:
     - ViT (supervised): CLS token or last-4 CLS concat
     - I-JEPA (self-supervised): avg patch features or last-4 avg-pooled concat
+    - MoCo (timm): Raw 2D features
     """
+    # Case 1: timm/MoCo returns a raw Tensor [B, D]
+    if torch.is_tensor(outputs):
+        return outputs
+
+    # Case 2: Hugging Face Output object
     if not hasattr(outputs, "last_hidden_state"):
         raise ValueError("Encoder outputs missing last_hidden_state.")
 
@@ -41,16 +45,19 @@ def extract_embed(outputs, model_type: str = "vit", last4: bool = False):
         hs = outputs.hidden_states[-4:]  # last 4 layers
 
         if model_type == "vit":
-            raise ValueError("--last4 only supported for ijepa model type")
+            # For ViT, we might want CLS from last 4 layers. 
+            # Note: The original code raised an error here for ViT last4.
+            # If you want to support it:
             # cls_layers = [h[:, 0] for h in hs]
             # return torch.cat(cls_layers, dim=-1)
+            raise ValueError("--last4 only supported for ijepa model type")
 
         elif model_type == "ijepa":
             pooled = [h.mean(dim=1) for h in hs]
             return torch.cat(pooled, dim=-1)
-
+        
         else:
-            raise ValueError("Unknown model_type: " + str(model_type))
+            raise ValueError("Unknown model_type for last4: " + str(model_type))
 
     # Single-layer feature extraction
     if model_type == "vit":
@@ -67,13 +74,6 @@ def count_params(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters())
 
 
-def accuracy_top1(logits: torch.Tensor, targets: torch.Tensor) -> float:
-    with torch.no_grad():
-        pred = torch.argmax(logits, dim=1)
-        correct = (pred == targets).sum().item()
-        return 100.0 * correct / targets.numel()
-
-
 def save_checkpoint(path: str, head: nn.Module, meta: Dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save({"head": head.state_dict(), "meta": meta}, path)
@@ -84,7 +84,7 @@ def train_one_epoch(
     head: nn.Module,
     dataloader,
     optimizer: torch.optim.Optimizer,
-    scaler: Optional[torch.cuda.amp.GradScaler],
+    scaler: Optional[torch.amp.GradScaler],
     scheduler,
     device: torch.device,
     epoch_idx: int,
@@ -113,9 +113,13 @@ def train_one_epoch(
         use_amp = (precision == "amp")
         autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
 
-        with torch.cuda.amp.autocast(enabled=(use_amp or use_bf16), dtype=autocast_dtype):
+        with torch.amp.autocast('cuda', enabled=(use_amp or use_bf16), dtype=autocast_dtype):
             with torch.no_grad():
-                enc_out = encoder(pixel_values=imgs) if "forward" in dir(encoder) else encoder(imgs)
+                # Handle inputs: HF expects kwarg 'pixel_values', timm expects positional arg
+                if model_type == "moco":
+                    enc_out = encoder(imgs)
+                else:
+                    enc_out = encoder(pixel_values=imgs)
 
             feats = extract_embed(enc_out, model_type=model_type, last4=last4)
             logits = head(feats)
@@ -187,8 +191,13 @@ def evaluate(
         imgs = imgs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
-        with torch.cuda.amp.autocast(enabled=(use_amp or use_bf16), dtype=autocast_dtype):
-            enc_out = encoder(pixel_values=imgs) if "forward" in dir(encoder) else encoder(imgs)
+        with torch.amp.autocast('cuda', enabled=(use_amp or use_bf16), dtype=autocast_dtype):
+            # Handle inputs: HF expects kwarg 'pixel_values', timm expects positional arg
+            if model_type == "moco":
+                enc_out = encoder(imgs)
+            else:
+                enc_out = encoder(pixel_values=imgs)
+            
             feats = extract_embed(enc_out, model_type=model_type, last4=last4)
             logits = head(feats)
             loss = cross_entropy(logits, targets)
