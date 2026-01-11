@@ -71,8 +71,8 @@ _EXTRACT_CFG = {"model_type": "vit", "last4": False}
 
 def set_extract_config(model_type: str = "vit", last4: bool = False):
     model_type = model_type.lower()
-    if model_type not in {"vit", "ijepa"}:
-        raise ValueError("model_type must be 'vit' or 'ijepa'")
+    if model_type not in {"vit", "ijepa", "moco"}:
+        raise ValueError("model_type must be 'vit', 'ijepa' or 'moco'")
     _EXTRACT_CFG["model_type"] = model_type
     _EXTRACT_CFG["last4"] = bool(last4)
 

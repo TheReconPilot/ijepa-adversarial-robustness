@@ -386,7 +386,7 @@ def load_whole_split(loader, device: torch.device) -> Tuple[torch.Tensor, torch.
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", choices=["cifar100", "imagenet100"], required=True)
-    ap.add_argument("--model_type", choices=["ijepa", "vit"], required=True)
+    ap.add_argument("--model_type", choices=["ijepa", "vit", "moco"], required=True)
     ap.add_argument("--last4", action="store_true")
     ap.add_argument("--model_id", required=True)
     ap.add_argument("--ckpt", required=True)
