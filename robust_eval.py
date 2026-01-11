@@ -17,6 +17,7 @@ from torchvision.transforms import InterpolationMode
 from tqdm.auto import tqdm
 import pandas as pd
 import torchvision.utils as vutils
+import timm
 
 try:
     from datasets import load_dataset
@@ -121,18 +122,43 @@ def build_loader(dataset: str, split: str, processor, batch_size: int, workers: 
 
 def load_encoder_and_head(model_id: str, ckpt_path: str, device: torch.device,
                           model_type: str, last4: bool, n_classes: int = 100):
-    """
-    Same contract as original repo: returns (wrapped_model, head, processor)
-    where wrapped_model is ModelWithNorm(encoder, Normalize(...))
-    """
-    processor = AutoImageProcessor.from_pretrained(model_id, use_fast=True)
-    tf, mean, std = build_eval_transform(processor)
-    norm = Normalize(mean, std).to(device)
+    
+    if model_type == "moco":
+        # MoCo / Timm loading
+        encoder = timm.create_model(
+            "vit_large_patch16_224", 
+            pretrained=True, 
+            pretrained_cfg_overlay=dict(hf_hub_id=model_id),
+            num_classes=0 
+        ).to(device)
+        encoder.eval()
+        
+        # Resolve config
+        data_config = timm.data.resolve_model_data_config(encoder)
+        mean = data_config['mean']
+        std = data_config['std']
+        
+        # Helper to mimic processor
+        class TimmProcessor:
+            def __init__(self, m, s, sz):
+                self.image_mean = m
+                self.image_std = s
+                self.size = {"height": sz[1], "width": sz[2]}
+                self.crop_size = self.size
+        
+        processor = TimmProcessor(mean, std, data_config['input_size'])
+        norm = Normalize(mean, std).to(device)
+        
+    else:
+        # Standard HF loading
+        processor = AutoImageProcessor.from_pretrained(model_id, use_fast=True)
+        tf, mean, std = build_eval_transform(processor)
+        norm = Normalize(mean, std).to(device)
 
-    encoder = AutoModel.from_pretrained(model_id, output_hidden_states=last4).to(device)
-    for p in encoder.parameters():
-        p.requires_grad_(False)
-    encoder.eval()
+        encoder = AutoModel.from_pretrained(model_id, output_hidden_states=last4).to(device)
+        for p in encoder.parameters():
+            p.requires_grad_(False)
+        encoder.eval()
 
     set_extract_config(model_type=model_type, last4=last4)
 

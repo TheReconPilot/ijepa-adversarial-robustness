@@ -76,16 +76,27 @@ def set_extract_config(model_type: str = "vit", last4: bool = False):
     _EXTRACT_CFG["model_type"] = model_type
     _EXTRACT_CFG["last4"] = bool(last4)
 
-
 def extract_embed(outputs) -> torch.Tensor:
     """
-    Config-aware extractor matching training pipeline:
-      - ViT: CLS (or last-4 CLS concat if last4=True)
-      - I-JEPA: avg-pooled patches (or last-4 avg-pooled concat if last4=True)
+    Unified embedding extractor:
+    - 2D Tensors (timm/MoCo): Already reduced to [Batch, Features]
+    - 3D Tensors (HF): Needs CLS [:, 0] or average pooling
     """
+    # 1. Resolve the primary feature tensor
+    if torch.is_tensor(outputs):
+        x = outputs  # timm models return [Batch, Features] (2D)
+        # If 2D, it is already the feature vector
+        if x.dim() == 2:
+            return x
+        # If 3D from timm (unlikely with num_classes=0 but possible), treat as sequence
+    elif hasattr(outputs, "last_hidden_state"):
+        x = outputs.last_hidden_state
+    else:
+        raise ValueError("Unsupported output type")
+
     mt = _EXTRACT_CFG["model_type"]
     last4 = _EXTRACT_CFG["last4"]
-
+    
     if not hasattr(outputs, "last_hidden_state"):
         raise ValueError("Encoder outputs missing last_hidden_state")
 
@@ -101,8 +112,8 @@ def extract_embed(outputs) -> torch.Tensor:
         else:  # ijepa
             pooled = [h.mean(dim=1) for h in hs]
             return torch.cat(pooled, dim=-1)
-
-    # Single-layer
+    
+    # Single-layer fallback
     if mt == "vit":
         return x[:, 0]
     else:  # ijepa
