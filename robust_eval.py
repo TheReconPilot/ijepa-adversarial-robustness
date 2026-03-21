@@ -39,6 +39,8 @@ from robust_utils import (
     parse_float_list, parse_int_list, Timer, save_json, project_linf, project_l2
 )
 
+from attacks.patchdrop import apply_random_patchdrop
+
 _BICUBIC = InterpolationMode.BICUBIC
 
 # ------------------------
@@ -390,7 +392,7 @@ def main():
     ap.add_argument("--last4", action="store_true")
     ap.add_argument("--model_id", required=True)
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--attack", choices=["fgsm", "pgd_inf", "pgd_l2", "autoattack"], required=True)
+    ap.add_argument("--attack", choices=["fgsm", "pgd_inf", "pgd_l2", "autoattack", "patchdrop"], required=True)
     ap.add_argument("--eps", required=True, help="float or list: e.g. 8/255 or 1/255,2/255,4/255,8/255")
     ap.add_argument("--steps", default="10,20,50")
     ap.add_argument("--alpha", default="auto", help="'auto' or float")
@@ -480,6 +482,53 @@ def main():
             row.update(meta)
             row["clean_top1_for_reference"] = clean_top1
             write_row_to_csv(row, csv_path)
+
+    elif args.attack == "patchdrop":
+        # Here, we treat args.eps as the list of drop_ratios (e.g., "0.1,0.25,0.5,0.75")
+        drop_ratios = eps_list 
+        
+        for drop_ratio in drop_ratios:
+            n, correct = 0, 0
+            pbar = tqdm(loader, desc=f"PatchDrop {drop_ratio*100:.0f}%", leave=False)
+            t0 = time.time()
+            
+            for i, (x, y) in enumerate(pbar):
+                x = x.to(device).float()
+                y = y.to(device)
+                
+                # Apply the patch drop
+                x_dropped = apply_random_patchdrop(x, drop_ratio=drop_ratio, patch_size=14, fill_value=0.5)
+                
+                with torch.no_grad():
+                    logits = full_model(x_dropped)
+                    pred = logits.argmax(1)
+                    correct += (pred == y).sum().item()
+                    n += y.numel()
+                    
+            wall = time.time() - t0
+            robust_top1 = 100.0 * correct / max(n, 1)
+            print(f"[PatchDrop] Drop Ratio: {drop_ratio*100:.0f}% | Robust Top-1: {robust_top1:.2f}%")
+            
+            row = {
+                "attack": "patchdrop", 
+                "eps": drop_ratio, # reusing the eps column for drop ratio
+                "steps": None, 
+                "restarts": None,
+                "robust_top1": robust_top1,
+                "imgs_per_sec": n / max(wall, 1e-6), 
+                "wall_clock_sec": wall,
+            }
+            row.update(meta)
+            row["clean_top1_for_reference"] = clean_top1
+            write_row_to_csv(row, csv_path)
+            rows.append(row)
+            
+            # Optional: Save images to verify the masking works
+            if args.save_k > 0:
+                save_dir = os.path.join(args.out_dir, f"patchdrop_{drop_ratio}")
+                os.makedirs(save_dir, exist_ok=True)
+                vutils.save_image(x_dropped[:args.save_k].detach().cpu(), 
+                                  os.path.join(save_dir, f"masked_batch.png"))
 
     else:  # autoattack
         if AutoAttack is None:
