@@ -10,3 +10,7 @@ logs/
 
 *.slurm
 *.sh
+
+*.png
+*.jpg
+*.jpeg
