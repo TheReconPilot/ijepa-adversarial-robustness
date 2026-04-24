@@ -2,6 +2,7 @@ runs/
 data/
 robust_runs/
 robust_results/
+*results*/
 
 __pycache__/
 attacks/__pycache__/
@@ -14,3 +15,5 @@ logs/
 *.png
 *.jpg
 *.jpeg
+
+tmp/

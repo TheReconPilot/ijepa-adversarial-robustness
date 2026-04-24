@@ -1,0 +1,57 @@
+# 8-sector occlusion experiment for ImageNet-100
+#
+# Geometry:
+# - Start from the model's standard ImageNet preprocessing output
+# - Split the image with the center horizontal, center vertical, and both diagonals
+# - This produces 8 sectors
+# - Evaluate by occluding k sectors for k = 1..7
+
+# --------------------------------------------------------------------------
+# Quick smoke test
+
+python occlusion_eval.py \
+  --models vit \
+  --split test \
+  --occlusion_counts 1,2 \
+  --max_combinations_per_k 1 \
+  --max_examples 8 \
+  --batch_size 4 \
+  --combo_chunk_size 1 \
+  --out_dir tmp/occlusion_smoke
+
+# --------------------------------------------------------------------------
+# Full test run, all 4 models, exhaustive combinations
+# Note: this is much heavier than the smoke test.
+
+python occlusion_eval.py \
+  --models ijepa mae vit dino \
+  --split test \
+  --occlusion_counts 1,2,3,4,5,6,7 \
+  --batch_size 32 \
+  --combo_chunk_size 4 \
+  --out_dir occlusion_results/test_exhaustive
+
+# --------------------------------------------------------------------------
+# Faster test run with sampled combinations per occlusion count
+
+python occlusion_eval.py \
+  --models ijepa mae vit dino \
+  --split test \
+  --occlusion_counts 1,2,3,4,5,6,7 \
+  --max_combinations_per_k 16 \
+  --batch_size 32 \
+  --combo_chunk_size 4 \
+  --out_dir occlusion_results/test_sampled16
+
+# --------------------------------------------------------------------------
+# If the GPU is busy, you can force CPU or allow fallback
+
+python occlusion_eval.py \
+  --models ijepa mae vit dino \
+  --split test \
+  --occlusion_counts 1,2,3,4,5,6,7 \
+  --max_combinations_per_k 8 \
+  --batch_size 16 \
+  --combo_chunk_size 2 \
+  --device cpu \
+  --out_dir occlusion_results/cpu_sampled8

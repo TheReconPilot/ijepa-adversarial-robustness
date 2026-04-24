@@ -1,0 +1,33 @@
+# Center-circle occlusion experiment for ImageNet-100
+#
+# Geometry:
+# - Start from the model's standard ImageNet preprocessing output
+# - Place a circle at the image center
+# - Radius is measured as a fraction of the smaller input dimension
+# - Default sweep: 1/8, 2/8, ..., 8/8
+
+# --------------------------------------------------------------------------
+# Quick smoke test
+
+python circle_occlusion_eval.py \
+  --models vit \
+  --split test \
+  --radius_fracs 1/8,2/8,4/8,8/8 \
+  --max_examples 32 \
+  --batch_size 32 \
+  --device cuda \
+  --amp \
+  --out_dir tmp/circle_occlusion_smoke
+
+# --------------------------------------------------------------------------
+# Full test run, all 4 models
+
+python circle_occlusion_eval.py \
+  --models ijepa mae vit dino \
+  --split test \
+  --radius_fracs 1/8,2/8,3/8,4/8,5/8,6/8,7/8,8/8 \
+  --batch_size 32 \
+  --workers 4 \
+  --device cuda \
+  --amp \
+  --out_dir circle_occlusion_results/test_full_gpu
