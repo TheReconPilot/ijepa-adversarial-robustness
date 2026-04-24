@@ -17,3 +17,5 @@ logs/
 *.jpeg
 
 tmp/
+
+*.pdf
