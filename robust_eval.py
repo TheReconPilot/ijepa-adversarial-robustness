@@ -122,8 +122,24 @@ def build_loader(dataset: str, split: str, processor, batch_size: int, workers: 
 # Model loading
 # ------------------------
 
+def _override_mae_mask_ratio(encoder, ratio: float) -> str:
+    """If the HF encoder is ViTMAEModel (or holds one), force its mask_ratio.
+    Returns a short status string for logging."""
+    touched = []
+    cfg = getattr(encoder, "config", None)
+    if cfg is not None and hasattr(cfg, "mask_ratio"):
+        cfg.mask_ratio = float(ratio)
+        touched.append("config.mask_ratio")
+    emb = getattr(encoder, "embeddings", None)
+    if emb is not None and hasattr(emb, "config") and hasattr(emb.config, "mask_ratio"):
+        emb.config.mask_ratio = float(ratio)
+        touched.append("embeddings.config.mask_ratio")
+    return f"forced mask_ratio={ratio} ({', '.join(touched) or 'no-op'})"
+
+
 def load_encoder_and_head(model_id: str, ckpt_path: str, device: torch.device,
-                          model_type: str, last4: bool, n_classes: int = 100):
+                          model_type: str, last4: bool, n_classes: int = 100,
+                          mae_mask_ratio: Optional[float] = None):
     
     if model_type == "moco":
         # MoCo / Timm loading
@@ -161,6 +177,10 @@ def load_encoder_and_head(model_id: str, ckpt_path: str, device: torch.device,
         for p in encoder.parameters():
             p.requires_grad_(False)
         encoder.eval()
+
+        if mae_mask_ratio is not None:
+            status = _override_mae_mask_ratio(encoder, mae_mask_ratio)
+            print(f"[robust_eval] {status}")
 
     set_extract_config(model_type=model_type, last4=last4)
 
@@ -412,6 +432,11 @@ def main():
                     help="Comma-separated list of AutoAttack sub-attacks to run")
     ap.add_argument("--aa_individual", action="store_true",
                     help="Run each AutoAttack sub-attack separately and log per-attack results")
+    ap.add_argument("--mae_mask_ratio", type=float, default=None,
+                    help="If set (e.g. 0.0), override HF MAE encoder's random mask_ratio. "
+                         "The default behavior of facebook/vit-mae-huge is mask_ratio=0.75 even at eval.")
+    ap.add_argument("--max_images", type=int, default=None,
+                    help="Optionally cap the evaluation split to the first N images (used for expensive PGD).")
     args = ap.parse_args()
 
     # deterministic-ish
@@ -424,11 +449,20 @@ def main():
         args.model_id, args.ckpt, device,
         model_type=args.model_type, last4=args.last4,
         n_classes=100,
+        mae_mask_ratio=args.mae_mask_ratio,
     )
 
     # Build loader
     loader = build_loader(args.dataset, args.split, processor,
                           batch_size=args.batch_size, workers=args.workers, seed=args.seed)
+    if args.max_images is not None:
+        base = loader.dataset
+        subset = Subset(base, list(range(min(args.max_images, len(base)))))
+        loader = DataLoader(subset, batch_size=args.batch_size, shuffle=False,
+                            num_workers=args.workers, pin_memory=True,
+                            persistent_workers=(args.workers > 0),
+                            collate_fn=getattr(loader, "collate_fn", None))
+        print(f"[info] capped eval to {len(subset)} images (of {len(base)})")
 
     # Build unified full model (FP32)
     set_extract_config(model_type=args.model_type, last4=args.last4)
