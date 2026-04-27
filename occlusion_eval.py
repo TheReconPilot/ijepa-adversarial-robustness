@@ -61,6 +61,24 @@ DEFAULT_PROBES: Dict[str, ProbeSpec] = {
         model_type="vit",
         last4=False,
     ),
+    "vit_large": ProbeSpec(
+        name="vit_large",
+        ckpt_path=_ROOT / "runs" / "imagenet100" / "vit_large_bn_on" / "best-val-top1.pt",
+        model_type="vit",
+        last4=False,
+    ),
+    "dino_large": ProbeSpec(
+        name="dino_large",
+        ckpt_path=_ROOT / "runs" / "imagenet100" / "dino_large_bn_on" / "best-val-top1.pt",
+        model_type="vit",
+        last4=False,
+    ),
+    "moco": ProbeSpec(
+        name="moco",
+        ckpt_path=_ROOT / "runs" / "imagenet100" / "moco_v3_large_bn_on" / "best-val-top1.pt",
+        model_type="moco",
+        last4=False,
+    ),
 }
 
 
